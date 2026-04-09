@@ -1,15 +1,9 @@
 # SemiColon
 
-> **The SemiColon Style** — a PostgreSQL SQL formatter.
-
-Designed by **Mostafa Ahmed (Alfie)** · [GitHub](https://github.com/mustafaa7med)
-
----
-
 ## Philosophy
 
 Most SQL formatters produce code that is syntactically correct but visually noisy.  
-The *Alfie Style* treats SQL as prose: it has a rhythm, a visible structure, and a
+The *SemiColon Style* treats SQL as prose: it has a rhythm, a visible structure, and a
 clear centre of gravity — the **River**.
 
 The goal is not merely consistency; it is *readability at a glance*.
