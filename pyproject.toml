@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "semicolon"
+version = "0.1.0"
+description = "The SemiColon Style — a PostgreSQL SQL formatter"
+authors = [
+    { name = "Mostafa Ahmed (Alfie)", email = "mustafaa7med@gmail.com" },
+]
+readme = "README.md"
+license = { text = "Apache" }
+requires-python = ">=3.10"
+keywords = ["sql", "formatter", "postgresql", "linter", "style"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "click>=8.1",
+    "sqlparse>=0.5",
+    "sqlfluff>=3.0",
+]
+
+[project.urls]
+Homepage       = "https://github.com/mustafaa7med/semicolon"
+"Bug Tracker"  = "https://github.com/mustafaa7med/semicolon/issues"
+Source         = "https://github.com/mustafaa7med/semicolon"
+
+[project.scripts]
+semicolon = "semicolon.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["semicolon*"]
+
+# Developer tooling
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts   = "-v"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
