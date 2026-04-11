@@ -11,10 +11,10 @@ The goal is not merely consistency; it is *readability at a glance*.
 ---
 ## Installation
 
-### From PyPI (In-Progress)
+### From PyPI
 
 ```bash
-pip install semicolon
+pip install semicolonfmt
 ```
 
 ### From source
