@@ -72,7 +72,7 @@ def _format_file(path: Path, check: bool) -> bool:
     default=False,
     help="Check mode: exit 1 if formatting is needed without writing files.",
 )
-@click.version_option(package_name="semicolon")
+@click.version_option(package_name="semicolonfmt")
 def main(target: str, check: bool) -> None:
     target_path = Path(target)
 

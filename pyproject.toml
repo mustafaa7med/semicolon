@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "semicolonfmt"
-version = "0.1.2"
+version = "0.1.3"
 description = "The SemiColon Style — a PostgreSQL SQL formatter"
 authors = [
     { name = "Mostafa Ahmed (Alfie)", email = "mustafaa7med@gmail.com" },
