@@ -1,5 +1,7 @@
 .DS_Store
 .claude/
-semicolon.egg-info/
+*.egg-info/
+dist/
 semicolon/__pycache__/
 tests/__pycache__/
+semicolonfmt.egg-info/
