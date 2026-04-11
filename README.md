@@ -1,13 +1,11 @@
 # SemiColon
 
 ## Philosophy
-
 Most SQL formatters produce code that is syntactically correct but visually noisy.  
 The *SemiColon Style* treats SQL as prose: it has a rhythm, a visible structure, and a
 clear centre of gravity — the **River**.
 
 The goal is not merely consistency; it is *readability at a glance*.
-
 ---
 ## Installation
 
@@ -26,44 +24,33 @@ pip install -e .
 ```
 
 ### Verify
-
 ```bash
 semicolon --version
 ```
-
 ---
-
 ## Usage
 
 ### Format a single file
-
 ```bash
 semicolon query.sql
 ```
-
 The file is formatted in-place.
 
 ### Format all `.sql` files in the current directory
-
 ```bash
 semicolon .
 ```
-
 ### CI/CD check mode
-
 ```bash
 semicolon query.sql --check   # exits 1 if formatting is needed
 semicolon . --check           # check all .sql files
 ```
-
 No files are written in `--check` mode — it is safe to use in pipelines.
 
 ---
 
 ## Before & After
-
 ### Before (messy, unformatted)
-
 ```sql
 with
 active_users as (
@@ -74,9 +61,7 @@ select o.user_id, count(*) as order_count, sum(o.total) as total_spent from orde
 )
 select au.user_name, au.user_email, ro.order_count, ro.total_spent from active_users au left join recent_orders ro on au.id = ro.user_id where ro.total_spent > 500 order by ro.total_spent desc limit 100;
 ```
-
 ### After
-
 ```sql
 WITH active_users AS(
     SELECT  u.id,
@@ -111,9 +96,7 @@ recent_orders AS(
 ```
 
 ---
-
 ## Pre-commit Integration
-
 ```yaml
 # .pre-commit-config.yaml
 repos:
@@ -123,13 +106,8 @@ repos:
       - id: semicolon
         args: [--check]
 ```
-
 ---
-
 ## License
-
 Apache — see [LICENSE](LICENSE).
-
 ---
-
 *Designed by Mostafa Ahmed (Alfie)*
