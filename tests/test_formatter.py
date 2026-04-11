@@ -71,16 +71,33 @@ class TestRiverAlignment:
         where_line = [l for l in result.splitlines() if "WHERE" in l][0]
         assert where_line.startswith("   WHERE  ")
 
-    def test_left_join_hangs(self):
-        """LEFT JOIN: JOIN aligns with river, LEFT extends left."""
+    def test_left_join_dynamic_river(self):
         result = fmt("select a from t left join u on t.id = u.id")
-        join_line = [l for l in result.splitlines() if "LEFT JOIN" in l][0]
-        assert join_line.startswith("LEFT JOIN  ")
+        ls = result.splitlines()
+        join_line = [l for l in ls if "LEFT JOIN" in l][0]
+        on_line = [l for l in ls if l.strip().startswith("ON")][0]
+        assert join_line.startswith(" LEFT JOIN  ")
+        n_join = join_line.index("LEFT JOIN") + len("LEFT JOIN") - 1
+        n_on = on_line.index("ON") + len("ON") - 1
+        assert n_join == n_on
 
-    def test_on_alignment(self):
+    def test_full_outer_join_dynamic_river(self):
+        result = fmt("select a from t full outer join u on t.id = u.id")
+        ls = result.splitlines()
+        join_line = [l for l in ls if "FULL OUTER JOIN" in l][0]
+        on_line = [l for l in ls if l.strip().startswith("ON")][0]
+        n_join = join_line.index("FULL OUTER JOIN") + len("FULL OUTER JOIN") - 1
+        n_on = on_line.index("ON") + len("ON") - 1
+        assert n_join == n_on
+
+    def test_on_alignment_plain_join(self):
         result = fmt("select a from t join u on t.id = u.id")
-        on_line = [l for l in result.splitlines() if l.strip().startswith("ON")][0]
-        assert on_line.startswith("      ON  ")
+        ls = result.splitlines()
+        join_line = [l for l in ls if l.strip().startswith("JOIN")][0]
+        on_line = [l for l in ls if l.strip().startswith("ON")][0]
+        n_join = join_line.index("JOIN") + len("JOIN") - 1
+        n_on = on_line.index("ON") + len("ON") - 1
+        assert n_join == n_on
 
 
 class TestASWallAndLeadingCommas:
@@ -166,44 +183,79 @@ class TestCTEFormatting:
     def test_cte_with_keyword_present(self):
         result = fmt("with cte as (select 1 as n) select n from cte")
         assert "WITH" in result
-        assert "cte AS (" in result
+        assert "cte AS(" in result
+
+    def test_cte_header_no_space_before_paren(self):
+        result = fmt("with cte as (select 1 as n) select n from cte")
+        assert "AS(" in result
+        assert "AS (" not in result
+
+    def test_with_starts_at_column_zero(self):
+        result = fmt("with cte as (select 1 as n) select n from cte")
+        first_line = result.splitlines()[0]
+        assert first_line.startswith("WITH")
 
     def test_cte_body_indented(self):
         result = fmt("with cte as (select 1 as n) select n from cte")
         ls = result.splitlines()
-        # Lines between '(' and ')' should be indented
         in_body = False
         for line in ls:
-            if "AS (" in line:
+            if "AS(" in line:
                 in_body = True
                 continue
-            if in_body and line.strip() == ")":
+            if in_body and line.strip() in (")", "),"):
                 break
             if in_body and line.strip():
                 assert line.startswith("   "), f"CTE body not indented: {line!r}"
+
+    def test_cte_no_blank_line_after_open_paren(self):
+        result = fmt("with cte as (select a from t) select a from cte")
+        ls = result.splitlines()
+        open_idx = next(i for i, l in enumerate(ls) if "AS(" in l)
+        assert ls[open_idx + 1].strip() != "", "Expected no blank line after CTE '('"
 
     def test_multiple_ctes_no_double_comma(self):
         result = fmt(
             "with a as (select 1 as x), b as (select 2 as y) select * from a join b on a.x = b.y"
         )
-        # Should NOT have double-comma like ")," followed by ", b AS"
         assert "),\n, " not in result
-        assert "),\n      , " not in result
-        assert result.count("AS (") == 2
+        assert result.count("AS(") == 2
 
-    def test_blank_lines_in_cte(self):
-        result = fmt("with cte as (select a from t) select a from cte")
-        # Blank line after '(' and before ')'
+    def test_subsequent_cte_at_column_zero(self):
+        result = fmt(
+            "with a as (select 1 as x), b as (select 2 as y) select * from a"
+        )
         ls = result.splitlines()
-        open_idx = next(i for i, l in enumerate(ls) if "AS (" in l)
-        assert ls[open_idx + 1].strip() == "", "Expected blank line after CTE '('"
+        second_cte_line = next(l for l in ls if "b AS(" in l)
+        assert second_cte_line.startswith("b AS(")
 
     def test_closing_paren_comma_own_line(self):
         result = fmt(
             "with a as (select 1 as x), b as (select 2 as y) select * from a"
         )
-        # ")," should appear on its own line
         assert any(l.strip() == ")," for l in result.splitlines())
+
+    def test_with_single_space_after_keyword(self):
+        result = fmt("with cte as (select 1 as n) select n from cte")
+        first_line = result.splitlines()[0]
+        assert first_line.startswith("WITH ")
+        assert not first_line.startswith("WITH  ")
+
+    def test_global_river_applied_to_cte_bodies(self):
+        sql = (
+            "with a as (select id from t), b as (select name from s) "
+            "select a.id, b.name from a full outer join b on a.id = b.id"
+        )
+        result = fmt(sql)
+        ls = result.splitlines()
+        join_line = next(l for l in ls if "FULL OUTER JOIN" in l)
+        n_col = join_line.index("FULL OUTER JOIN") + len("FULL OUTER JOIN") - 1
+        cte_select_lines = [l for l in ls if l.lstrip().startswith("SELECT") and "WITH" not in l]
+        cte_from_lines = [l for l in ls if l.lstrip().startswith("FROM")]
+        for line in cte_select_lines + cte_from_lines:
+            kw = line.lstrip().split()[0]
+            kw_end = len(line) - len(line.lstrip()) + len(kw) - 1
+            assert kw_end == n_col, f"CTE body line not at global river: {line!r}"
 
 
 class TestIdempotency:
