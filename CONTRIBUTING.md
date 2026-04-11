@@ -1,4 +1,4 @@
-# Contributing to semicolon
+# Contributing to SemiColon
 
 Thank you for your interest in contributing to **SemiColon**!  
 This is an open-source project and all contributions — bug reports, feature
@@ -85,7 +85,7 @@ Open an issue at <https://github.com/mustafaa7med/semicolon/issues> and include:
 - Your `semicolon --version` output.
 - The **original** SQL that produced unexpected output.
 - The **actual** output you received.
-- The **expected** output according to the Alfie Style rules.
+- The **expected** output according to the SemiColon Style rules.
 
 A minimal, reproducible example is always appreciated.
 

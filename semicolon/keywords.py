@@ -1,21 +1,3 @@
-"""SQL keyword constants and river-alignment helpers for the SemiColon Style."""
-
-# ──────────────────────────────────────────────────────────────────────────────
-# RIVER
-# The "River" is the right-alignment column.  Every clause keyword's final
-# character aligns at this column so the keyword block forms a neat right edge.
-#
-# River = 8 so that ORDER BY and GROUP BY (8 chars each) sit flush, and SELECT
-# (6 chars) gets 2 leading spaces:
-#
-#   ORDER BY  …    ← no padding needed, 8 chars
-#   GROUP BY  …    ← no padding needed, 8 chars
-#     SELECT  …    ← 2 leading spaces
-#       FROM  …    ← 4 leading spaces
-#      WHERE  …    ← 3 leading spaces
-#   LEFT JOIN  …   ← overflows by 1 ("LEFT hangs to the left")
-# ──────────────────────────────────────────────────────────────────────────────
-
 RIVER: int = 8
 
 CLAUSE_KEYWORDS = [
@@ -77,9 +59,9 @@ NEWLINE_STARTERS = {
 CONJUNCT_KEYWORDS = {"AND", "OR"}
 
 
-def pad_keyword(kw: str) -> str:
-    if len(kw) <= RIVER:
-        return kw.rjust(RIVER)
+def pad_keyword(kw: str, river: int = RIVER) -> str:
+    if len(kw) <= river:
+        return kw.rjust(river)
     return kw
 
 

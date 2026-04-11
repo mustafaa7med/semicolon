@@ -19,7 +19,6 @@ from .keywords import (
 
 _FUNC_SPACE_RE = re.compile(r'(\w)\s+\(')
 
-    # Operators that get exactly one space on each side
 _OPERATOR_RE = re.compile(
     r'\s*([=<>!]+|::|\|\||\+|-(?!-)|(?<!\()\*(?!\))|/|%|@>|<@|&&|\|\|)\s*'
 )
@@ -469,6 +468,28 @@ def _format_subquery(sql: str, extra_indent: int = 0) -> str:
     return "\n".join(indent + line for line in lines)
 
 
+_JOIN_KEYWORDS_BY_LEN = [
+    "RIGHT OUTER JOIN",
+    "LEFT OUTER JOIN",
+    "FULL OUTER JOIN",
+    "RIGHT JOIN",
+    "INNER JOIN",
+    "CROSS JOIN",
+    "LEFT JOIN",
+    "FULL JOIN",
+    "JOIN",
+]
+
+
+def _effective_river(sql: str) -> int:
+    upper = sql.upper()
+    for jk in _JOIN_KEYWORDS_BY_LEN:
+        if re.search(r'\b' + re.escape(jk) + r'\b', upper):
+            candidate = len(jk) + 1
+            return candidate if candidate > RIVER else RIVER
+    return RIVER
+
+
 def _normalize_expression(expr: str) -> str:
     result = _FUNC_SPACE_RE.sub(r'\1(', expr)
     return result
@@ -501,16 +522,16 @@ def _has_select_inside(s: str) -> bool:
             return True
     return False
 
-def _format_clause(clause: Clause, extra_indent: int = 0) -> str:
+def _format_clause(clause: Clause, extra_indent: int = 0, effective_river: int = RIVER) -> str:
     kw = clause.keyword
     content = clause.content
-    padded_kw = pad_keyword(kw)
+    padded_kw = pad_keyword(kw, effective_river)
     ei = " " * extra_indent
 
     if not kw:
         return ei + content
 
-    prefix = f"{ei}{padded_kw}{KEYWORD_SUFFIX}"  # e.g. "  SELECT  "
+    prefix = f"{ei}{padded_kw}{KEYWORD_SUFFIX}"
 
     if kw in ('SELECT', 'DISTINCT'):
         cols = _split_columns(content)
@@ -524,7 +545,7 @@ def _format_clause(clause: Clause, extra_indent: int = 0) -> str:
               'FULL OUTER JOIN', 'FULL JOIN'):
         if '(' in content and _has_select_inside(content):
             inner, alias = _extract_subquery_and_alias(content)
-            sub_fmt = _format_subquery(inner, extra_indent=extra_indent + RIVER + 2)
+            sub_fmt = _format_subquery(inner, extra_indent=extra_indent + effective_river + 2)
             if alias:
                 return (f"{prefix}(\n\n{sub_fmt}\n\n"
                         f"{ei}{' ' * (len(padded_kw) + 2)}) AS {alias}")
@@ -541,10 +562,9 @@ def _format_clause(clause: Clause, extra_indent: int = 0) -> str:
             return f"{prefix}{content}"
         lines: List[str] = []
         for c in conjuncts:
-            op = c.operator  # "", "AND", or "OR"
+            op = c.operator
             expr = _normalize_expression(c.expression)
             if op == "":
-                # Check for BETWEEN
                 if re.search(r'\bBETWEEN\b', expr, re.IGNORECASE):
                     formatted_expr = _format_between(
                         expr,
@@ -554,7 +574,7 @@ def _format_clause(clause: Clause, extra_indent: int = 0) -> str:
                 else:
                     lines.append(f"{prefix}{expr}")
             else:
-                op_padded = pad_keyword(op)
+                op_padded = pad_keyword(op, effective_river)
                 op_prefix = f"{ei}{op_padded}{KEYWORD_SUFFIX}"
                 if re.search(r'\bBETWEEN\b', expr, re.IGNORECASE):
                     formatted_expr = _format_between(
@@ -602,48 +622,49 @@ def _extract_subquery_and_alias(content: str) -> Tuple[str, str]:
     return inner, alias
 
 
-def _format_select_statement(sql: str, extra_indent: int = 0) -> str:
-    """Format a single SELECT (or INSERT/UPDATE/DELETE) statement."""
+def _format_select_statement(sql: str, extra_indent: int = 0, effective_river: int = None) -> str:
+    er = effective_river if effective_river is not None else _effective_river(sql.strip())
     clauses = _split_into_clauses(sql.strip())
     lines: List[str] = []
     for clause in clauses:
-        formatted = _format_clause(clause, extra_indent=extra_indent)
+        formatted = _format_clause(clause, extra_indent=extra_indent, effective_river=er)
         if formatted.strip():
             lines.append(formatted)
     return "\n".join(lines)
 
-CTE_INDENT = 3  # spaces inside CTE body
+CTE_INDENT = 3
 
 
 def _format_with_statement(sql: str) -> str:
+    global_river = _effective_river(sql)
     ctes, remaining = _parse_ctes(sql)
 
     if not ctes:
-        return _format_select_statement(sql)
+        return _format_select_statement(sql, effective_river=global_river)
 
-    # The name column starts right after "    WITH  " = RIVER + KEYWORD_SUFFIX chars.
-    name_col = RIVER + len(KEYWORD_SUFFIX)           # 10 chars
-    name_indent = " " * name_col                     # indent for subsequent CTEs
+    cte_extra_indent = CTE_INDENT if global_river == RIVER else 0
 
     out_parts: List[str] = []
     for idx, cte in enumerate(ctes):
         body_formatted = _format_select_statement(
             cte.body_sql,
-            extra_indent=CTE_INDENT,
+            extra_indent=cte_extra_indent,
+            effective_river=global_river,
         )
         if idx == 0:
-            header = f"{pad_keyword('WITH')}{KEYWORD_SUFFIX}{cte.name} AS ("
+            header = f"WITH {cte.name} AS("
         else:
-            header = f"{name_indent}{cte.name} AS ("
+            header = f"{cte.name} AS("
 
         closing = ")," if idx < len(ctes) - 1 else ")"
-        cte_block = f"{header}\n\n{body_formatted}\n\n{closing}"
+        cte_block = f"{header}\n{body_formatted}\n{closing}"
         out_parts.append(cte_block)
         if idx < len(ctes) - 1:
-            out_parts.append("")  
+            out_parts.append("")
 
     if remaining:
-        main_formatted = _format_select_statement(remaining)
+        out_parts.append("")
+        main_formatted = _format_select_statement(remaining, effective_river=global_river)
         out_parts.append(main_formatted)
 
     return "\n".join(out_parts)
