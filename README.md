@@ -101,7 +101,7 @@ recent_orders AS(
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/mustafaa7med/semicolon
-    rev: v0.1.0
+    rev: v0.1.3
     hooks:
       - id: semicolon
         args: [--check]
