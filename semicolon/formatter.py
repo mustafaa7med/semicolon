@@ -491,8 +491,7 @@ def _effective_river(sql: str) -> int:
 
 
 def _normalize_expression(expr: str) -> str:
-    result = _FUNC_SPACE_RE.sub(r'\1(', expr)
-    return result
+    return _normalize_operators(_FUNC_SPACE_RE.sub(r'\1(', expr))
 
 
 def _normalize_operators(expr: str) -> str:
