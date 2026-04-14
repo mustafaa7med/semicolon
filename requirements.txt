@@ -1,0 +1,4 @@
+click>=8.1
+sqlparse>=0.5
+sqlfluff>=3.0
+pytest>=8.0
