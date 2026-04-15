@@ -258,6 +258,50 @@ class TestCTEFormatting:
             assert kw_end == n_col, f"CTE body line not at global river: {line!r}"
 
 
+class TestOperatorSpacing:
+    def test_gt_no_spaces(self):
+        result = fmt("select id from t where salary>300")
+        assert "salary > 300" in result
+
+    def test_lt_no_spaces(self):
+        result = fmt("select id from t where score<18")
+        assert "score < 18" in result
+
+    def test_eq_no_spaces(self):
+        result = fmt("select id from t where status=1")
+        assert "status = 1" in result
+
+    def test_gte_no_spaces(self):
+        result = fmt("select id from t where score>=90")
+        assert "score >= 90" in result
+
+    def test_lte_no_spaces(self):
+        result = fmt("select id from t where price<=100")
+        assert "price <= 100" in result
+
+    def test_neq_bang_no_spaces(self):
+        result = fmt("select id from t where status!=0")
+        assert "status != 0" in result
+
+    def test_neq_diamond_no_spaces(self):
+        result = fmt("select id from t where category<>'admin'")
+        assert "category <> 'admin'" in result
+
+    def test_multiple_operators_in_where(self):
+        result = fmt("select id from t where score>=18 and salary>300")
+        assert "score >= 18" in result
+        assert "salary > 300" in result
+
+    def test_already_spaced_is_idempotent(self):
+        result = fmt("select id from t where salary > 300")
+        assert "salary > 300" in result
+        assert "salary  > 300" not in result
+
+    def test_on_clause_operator_spaced(self):
+        result = fmt("select a from t join u on t.id=u.id")
+        assert "t.id = u.id" in result
+
+
 class TestIdempotency:
     def test_simple_select_idempotent(self):
         sql = "select id, name from users where active = true"
