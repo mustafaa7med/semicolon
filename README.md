@@ -1,4 +1,20 @@
 # SemiColon
+<p align="center">
+
+<a href="https://github.com/mustafaa7med/semicolon/stargazers">
+  <img src="https://img.shields.io/github/stars/mustafaa7med/semicolon?style=flat&color=ffffff&labelColor=ffffff&logo=github&logoColor=24292f" />
+</a>
+<a href="https://github.com/mustafaa7med/semicolon/network">
+  <img src="https://img.shields.io/github/forks/mustafaa7med/semicolon?style=flat&color=ffffff&labelColor=ffffff&logo=github&logoColor=24292f" />
+</a>
+<a href="https://pypi.org/project/semicolonfmt">
+  <img src="https://img.shields.io/pypi/dw/semicolonfmt?style=flat&color=ffffff&labelColor=ffffff&logo=pypi&logoColor=24292f" />
+</a>
+<a href="https://pypi.org/project/semicolonfmt">
+  <img src="https://img.shields.io/badge/Python-≥3.10-ffffff?style=flat&labelColor=ffffff&logo=python&logoColor=24292f" />
+</a>
+
+<img src="https://api.visitorbadge.io/api/visitors?path=https%3A%2F%2Fgithub.com%2Fmustafaa7med%2Fsemicolon&label=visitors&labelColor=%23ffffff&countColor=%2324292f&style=flat&labelStyle=flat" />
 
 ## Philosophy
 Most SQL formatters produce code that is syntactically correct but visually noisy.  
@@ -6,7 +22,7 @@ The *SemiColon Style* treats SQL as prose: it has a rhythm, a visible structure,
 clear centre of gravity — the **River**.
 
 The goal is not merely consistency; it is *readability at a glance*.
----
+
 ## Installation
 
 ### From PyPI
