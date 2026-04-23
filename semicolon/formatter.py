@@ -19,6 +19,12 @@ from .keywords import (
 
 _FUNC_SPACE_RE = re.compile(r'(\w)\s+\(')
 
+# SQL keywords that must keep a space before '(' (not function calls)
+_KW_SPACE_BEFORE_PAREN_RE = re.compile(
+    r'\b(IN|NOT|ANY|SOME|ALL|EXISTS|OVER|WITHIN|FILTER)\(',
+    re.IGNORECASE,
+)
+
 _OPERATOR_RE = re.compile(
     r'\s*([=<>!]+|::|\|\||\+|-(?!-)|(?<!\()\*(?!\))|/|%|@>|<@|&&|\|\|)\s*'
 )
@@ -43,8 +49,6 @@ def _uppercase_keywords(sql: str) -> str:
 
 
 def _strip_extra_whitespace(sql: str) -> str:
-    # Collapse runs of whitespace (outside strings/comments) to single spaces.
-    # sqlparse's format with strip_whitespace=True handles this safely.
     return sqlparse.format(sql, strip_whitespace=True)
 
 @dataclass
@@ -54,22 +58,12 @@ class Clause:
 
 
 def _split_into_clauses(sql: str) -> List[Clause]:
-    """
-    Split *sql* into Clause objects at top-level keyword boundaries.
-
-    Parentheses depth is tracked so that keywords inside sub-queries or
-    CTEs are NOT treated as clause boundaries.
-
-    Build a pattern that matches clause-starting keywords at word boundaries.
-    Longer keywords first to avoid partial matches.
-    """
     starters = sorted(NEWLINE_STARTERS, key=len, reverse=True)
     pat = re.compile(
         r'\b(' + '|'.join(re.escape(s) for s in starters) + r')\b',
         re.IGNORECASE,
     )
 
-    # Walk token by token to honour nesting depth.
     flat_tokens: list[tuple] = []
     for tok in sqlparse.parse(sql)[0].flatten():
         flat_tokens.append((tok.ttype, tok.value))
@@ -151,15 +145,10 @@ def _split_into_clauses(sql: str) -> List[Clause]:
 class Column:
     expression: str
     alias: Optional[str] = None
+    alias_explicit: bool = True  # False when alias has no AS keyword
 
 
 def _split_columns(content: str) -> List[Column]:
-    """
-    Split a comma-separated column list into Column objects.
-
-    Respects parentheses so that function calls like
-    ``COALESCE(a, b)`` are not split.
-    """
     cols: List[Column] = []
     depth = 0
     current: List[str] = []
@@ -190,10 +179,6 @@ def _split_columns(content: str) -> List[Column]:
 
 
 def _parse_column(raw: str) -> Column:
-    """Parse a single column expression (possibly with AS alias).
-       Match trailing AS alias – be careful of CASE ... END AS alias
-       We look for a top-level AS token.
-    """
     tokens = list(sqlparse.parse(raw)[0].flatten())
     as_pos = None
     depth = 0
@@ -211,56 +196,79 @@ def _parse_column(raw: str) -> Column:
         alias_parts = [t.value for t in tokens[as_pos + 1:]]
         expr = ''.join(expr_parts).strip()
         alias = ''.join(alias_parts).strip()
-        return Column(expression=expr, alias=alias)
-    # No AS: try implicit alias (last bare identifier after whitespace)
+        return Column(expression=expr, alias=alias, alias_explicit=True)
+    # No AS keyword — check for implicit alias on a parenthesized expression:
+    # e.g. "(SELECT ...) alias_name"
+    s = raw.strip()
+    if s.startswith('('):
+        d, close_idx = 0, -1
+        for i, ch in enumerate(s):
+            if ch == '(':
+                d += 1
+            elif ch == ')':
+                d -= 1
+                if d == 0:
+                    close_idx = i
+                    break
+        if close_idx >= 0:
+            after = s[close_idx + 1:].strip()
+            if after and re.match(r'^\w+$', after):
+                return Column(expression=s[:close_idx + 1], alias=after, alias_explicit=False)
     return Column(expression=raw.strip())
 
 
 def _format_select_columns(cols: List[Column], indent: str) -> str:
-    """
-    Format a SELECT column list with:
-      • Trailing commas — comma immediately after each column except the last.
-      • Subsequent columns indented to align with the first column.
-      • AS vertical wall (all AS keywords at the same column).
-      • Single space after AS.
-
-    *indent* is the string that precedes the first column on its line
-    (everything after "SELECT  ").
-    """
     if not cols:
         return ""
 
-    # Normalise each expression (remove space before '(', etc.)
+    col_start = len(indent)
+
     normed = [
         Column(
             expression=_FUNC_SPACE_RE.sub(r'\1(', c.expression),
             alias=c.alias,
+            alias_explicit=c.alias_explicit,
         )
         for c in cols
     ]
 
-    # Compute AS wall: max expression length among columns that have an alias.
-    aliased = [c for c in normed if c.alias]
+    # AS wall: only for non-subquery columns with an explicit AS alias.
+    aliased = [c for c in normed if c.alias and c.alias_explicit and not _is_subquery_expr(c.expression)]
     as_col = max((len(c.expression) for c in aliased), default=0)
 
     # Indent for columns 2..N — align with the first column character.
-    col_indent = " " * len(indent)
+    col_indent = " " * col_start
 
     lines: List[str] = []
     for i, col in enumerate(normed):
-        if col.alias:
-            expr_padded = col.expression.ljust(as_col)
-            col_str = f"{expr_padded} AS {col.alias}"
-        else:
-            col_str = col.expression
-
         is_last = i == len(normed) - 1
         suffix = "" if is_last else ","
 
-        if i == 0:
-            lines.append(f"{col_str}{suffix}")
+        if _is_subquery_expr(col.expression):
+            inner = col.expression.strip()[1:-1].strip()
+            sub_block = _format_subquery_inline(inner, col_start)
+            sub_lines_list = sub_block.splitlines()
+            if col.alias:
+                alias_str = f" AS {col.alias}" if col.alias_explicit else f" {col.alias}"
+                sub_lines_list[-1] = sub_lines_list[-1] + alias_str
+            sub_lines_list[-1] = sub_lines_list[-1] + suffix
+            if i != 0:
+                sub_lines_list[0] = col_indent + sub_lines_list[0]
+            lines.append("\n".join(sub_lines_list))
         else:
-            lines.append(f"{col_indent}{col_str}{suffix}")
+            if col.alias:
+                if col.alias_explicit:
+                    expr_padded = col.expression.ljust(as_col)
+                    col_str = f"{expr_padded} AS {col.alias}"
+                else:
+                    col_str = f"{col.expression} {col.alias}"
+            else:
+                col_str = col.expression
+
+            if i == 0:
+                lines.append(f"{col_str}{suffix}")
+            else:
+                lines.append(f"{col_indent}{col_str}{suffix}")
 
     return "\n".join(lines)
 
@@ -271,10 +279,6 @@ class Conjunct:
 
 
 def _split_conjuncts(content: str) -> List[Conjunct]:
-    """
-    Split a WHERE/HAVING expression on top-level AND/OR while keeping
-    BETWEEN...AND intact.
-    """
     conjuncts: List[Conjunct] = []
     current: List[str] = []
     depth = 0
@@ -340,10 +344,6 @@ def _split_conjuncts(content: str) -> List[Conjunct]:
 
 
 def _split_conjuncts_v2(content: str) -> List[Conjunct]:
-    """
-    Robust version: walk char-by-char to split on top-level AND/OR.
-    """
-    # Tokenise the content preserving original spacing.
     tokens_flat = list(sqlparse.parse(content)[0].flatten())
     parts: List[Conjunct] = []
     current_toks: List[str] = []
@@ -420,7 +420,6 @@ class CTEBlock:
 
 def _parse_ctes(sql: str) -> Tuple[List[CTEBlock], str]:
     ctes: List[CTEBlock] = []
-    # Remove leading WITH keyword
     rest = sql.strip()
     if not re.match(r'^WITH\b', rest, re.IGNORECASE):
         return [], rest
@@ -491,11 +490,12 @@ def _effective_river(sql: str) -> int:
 
 
 def _normalize_expression(expr: str) -> str:
-    return _normalize_operators(_FUNC_SPACE_RE.sub(r'\1(', expr))
+    result = _FUNC_SPACE_RE.sub(r'\1(', expr)
+    result = _KW_SPACE_BEFORE_PAREN_RE.sub(r'\1 (', result)
+    return _normalize_operators(result)
 
 
 def _normalize_operators(expr: str) -> str:
-    # Ensure exactly one space on each side of comparison operators.
     tokens = list(sqlparse.parse(expr)[0].flatten())
     out: List[str] = []
     for tok in tokens:
@@ -517,9 +517,81 @@ def _has_select_inside(s: str) -> bool:
             depth += 1
         elif tok.value == ')':
             depth -= 1
-        elif depth == 0 and _is_keyword_token(tok.ttype) and tok.value.upper() == 'SELECT':
+        elif depth == 1 and _is_keyword_token(tok.ttype) and tok.value.upper() == 'SELECT':
             return True
     return False
+
+
+def _is_subquery_expr(expr: str) -> bool:
+    """True if *expr* is exactly a parenthesized subquery: (SELECT ...) with nothing else."""
+    s = expr.strip()
+    if not s.startswith('('):
+        return False
+    depth = 0
+    for i, ch in enumerate(s):
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+            if depth == 0:
+                inner = s[1:i].strip()
+                remainder = s[i + 1:].strip()
+                return (not remainder and
+                        bool(re.match(r'^SELECT\b', inner, re.IGNORECASE)))
+    return False
+
+
+def _format_subquery_inline(inner_sql: str, open_paren_col: int) -> str:
+    formatted = _format_select_statement(inner_sql.strip())
+    sub_lines = formatted.splitlines()
+    non_empty = [l for l in sub_lines if l.strip()]
+    if not non_empty:
+        return f"({inner_sql})"
+
+    min_indent = min(len(l) - len(l.lstrip()) for l in non_empty)
+
+    result = ["(" + sub_lines[0].lstrip()]
+    for line in sub_lines[1:]:
+        if line.strip():
+            result.append(" " * (open_paren_col + 1) + line[min_indent:])
+        else:
+            result.append("")
+    result.append(" " * (open_paren_col + min_indent) + ")")
+    return "\n".join(result)
+
+
+def _expand_subqueries_in_expr(expr: str, expr_col: int) -> str:
+    out: List[str] = []
+    i = 0
+    while i < len(expr):
+        if expr[i] != '(':
+            out.append(expr[i])
+            i += 1
+            continue
+
+        depth = 1
+        j = i + 1
+        while j < len(expr) and depth > 0:
+            if expr[j] == '(':
+                depth += 1
+            elif expr[j] == ')':
+                depth -= 1
+            j += 1
+
+        inner = expr[i + 1:j - 1].strip()
+        if re.match(r'^SELECT\b', inner, re.IGNORECASE):
+            # Compute the column where '(' appears on the current output line
+            joined = ''.join(out)
+            last_nl = joined.rfind('\n')
+            paren_col = (len(joined) - last_nl - 1) if last_nl >= 0 else (expr_col + len(joined))
+            out.append(_format_subquery_inline(inner, paren_col))
+            i = j
+        else:
+            out.append(expr[i:j])
+            i = j
+
+    return ''.join(out)
+
 
 def _format_clause(clause: Clause, extra_indent: int = 0, effective_river: int = RIVER) -> str:
     kw = clause.keyword
@@ -571,7 +643,8 @@ def _format_clause(clause: Clause, extra_indent: int = 0, effective_river: int =
                     )
                     lines.append(f"{prefix}{formatted_expr}")
                 else:
-                    lines.append(f"{prefix}{expr}")
+                    expanded = _expand_subqueries_in_expr(expr, len(prefix))
+                    lines.append(f"{prefix}{expanded}")
             else:
                 op_padded = pad_keyword(op, effective_river)
                 op_prefix = f"{ei}{op_padded}{KEYWORD_SUFFIX}"
@@ -582,7 +655,8 @@ def _format_clause(clause: Clause, extra_indent: int = 0, effective_river: int =
                     )
                     lines.append(f"{op_prefix}{formatted_expr}")
                 else:
-                    lines.append(f"{op_prefix}{expr}")
+                    expanded = _expand_subqueries_in_expr(expr, len(op_prefix))
+                    lines.append(f"{op_prefix}{expanded}")
         return "\n".join(lines)
 
     if kw in ('ORDER BY', 'GROUP BY'):
@@ -669,6 +743,25 @@ def _format_with_statement(sql: str) -> str:
     return "\n".join(out_parts)
 
 
+def _split_leading_comments(sql: str) -> Tuple[str, str]:
+    i = 0
+    prefix_end = 0
+    while i < len(sql):
+        # Skip blank/whitespace-only content
+        while i < len(sql) and sql[i] in ' \t\r\n':
+            i += 1
+        if i >= len(sql):
+            break
+        # Consume a line comment
+        if sql[i:i + 2] == '--':
+            end = sql.find('\n', i)
+            i = (end + 1) if end != -1 else len(sql)
+            prefix_end = i
+        else:
+            break
+    return sql[:prefix_end], sql[prefix_end:].lstrip()
+
+
 def format_sql(sql: str) -> str:
     """
     Format *sql* according to the SemiColon Style and return the result.
@@ -687,11 +780,15 @@ def format_sql(sql: str) -> str:
         raw = _uppercase_keywords(_strip_extra_whitespace(raw))
         raw = _strip_extra_whitespace(raw)
 
+        comment_prefix, sql_body = _split_leading_comments(raw)
 
-        if re.match(r'^WITH\b', raw, re.IGNORECASE):
-            result = _format_with_statement(raw)
+        if re.match(r'^WITH\b', sql_body, re.IGNORECASE):
+            result = _format_with_statement(sql_body)
         else:
-            result = _format_select_statement(raw)
+            result = _format_select_statement(sql_body)
+
+        if comment_prefix.strip():
+            result = comment_prefix.rstrip() + '\n' + result
 
         result = result.rstrip()
         if not result.endswith(';'):

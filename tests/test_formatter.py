@@ -325,6 +325,144 @@ class TestIdempotency:
         assert once == twice
 
 
+class TestSubqueryFormatting:
+    def test_scalar_subquery_in_select_expands(self):
+        sql = "select name, (select count(*) from tasks where assigned_to = e.id) as cnt from employees e"
+        result = fmt(sql)
+        # Subquery should be multi-line
+        assert "(SELECT  COUNT(*)" in result
+        assert "FROM  tasks" in result
+        assert "WHERE  assigned_to = e.id" in result
+
+    def test_scalar_subquery_closing_paren_on_own_line(self):
+        sql = "select (select count(*) from t) as n from s"
+        result = fmt(sql)
+        ls = result.splitlines()
+        # There must be a line that is just indented ')' (possibly with AS alias)
+        assert any(l.strip().startswith(")") for l in ls)
+
+    def test_scalar_subquery_alias_after_closing_paren(self):
+        sql = "select (select count(*) from t) as total from s"
+        result = fmt(sql)
+        # ') AS total' must be on the closing paren line
+        paren_line = next(l for l in result.splitlines() if l.strip().startswith(")"))
+        assert "AS total" in paren_line
+
+    def test_scalar_subquery_river_alignment(self):
+        """Keywords inside the subquery must be right-aligned to the same river column."""
+        sql = "select (select id from t where x = 1) as v from s"
+        result = fmt(sql)
+        ls = result.splitlines()
+        # The subquery SELECT is on a line containing '(SELECT'
+        select_line = next(l for l in ls if "(SELECT" in l)
+        from_line   = next(l for l in ls if l.strip().startswith("FROM") and "FROM  s" not in l)
+        where_line  = next(l for l in ls if l.strip().startswith("WHERE"))
+        # Right-edge of SELECT inside (SELECT, FROM, WHERE must all align
+        sub_select_col = select_line.index("(SELECT") + len("(SELECT") - 1
+        from_col  = from_line.index("FROM") + len("FROM") - 1
+        where_col = where_line.index("WHERE") + len("WHERE") - 1
+        assert sub_select_col == from_col == where_col
+
+    def test_where_in_subquery_expands(self):
+        sql = "select id from employees where department_id in (select id from departments where active = true)"
+        result = fmt(sql)
+        assert "IN (SELECT" in result
+        assert "FROM  departments" in result
+        assert "WHERE  active = TRUE" in result
+
+    def test_exists_subquery_expands(self):
+        sql = "select id from orders where exists (select 1 from payments where payments.order_id = orders.id)"
+        result = fmt(sql)
+        assert "EXISTS (SELECT" in result
+        assert "FROM  payments" in result
+
+    def test_where_in_subquery_with_and_conjunct(self):
+        sql = "select id from t where id in (select id from s) and status = 1"
+        result = fmt(sql)
+        ls = result.splitlines()
+        and_line = next(l for l in ls if l.strip().startswith("AND"))
+        assert "status = 1" in and_line
+
+    def test_subquery_column_does_not_affect_as_wall(self):
+        """A subquery column should not inflate the AS-wall for regular columns."""
+        sql = "select id as user_id, (select count(*) from t) as cnt from s"
+        result = fmt(sql)
+        # Regular column AS wall should align id's AS
+        id_line = next(l for l in result.splitlines() if "user_id" in l)
+        cnt_line = next(l for l in result.splitlines() if ") AS cnt" in l)
+        # id AS should appear on the id line; ) AS cnt on its own line
+        assert "AS user_id" in id_line
+        assert cnt_line.strip().startswith(") AS cnt")
+
+    def test_subquery_idempotent(self):
+        sql = "select name, (select count(*) from tasks where assigned_to = e.id) as cnt from employees e"
+        once = fmt(sql)
+        twice = fmt(once)
+        assert once == twice
+
+    def test_implicit_alias_subquery_expands(self):
+        """(SELECT ...) alias (no AS keyword) should expand and keep alias without AS."""
+        sql = "select name, (select count(*) from tasks where assigned_to = e.id) cnt from employees e"
+        result = fmt(sql)
+        ls = result.splitlines()
+        # Subquery must be multi-line
+        assert any("(SELECT" in l for l in ls)
+        # Closing paren line should have the alias WITHOUT AS
+        paren_line = next(l for l in ls if l.strip().startswith(")"))
+        assert "cnt" in paren_line
+        assert "AS cnt" not in paren_line
+
+    def test_implicit_alias_subquery_idempotent(self):
+        sql = "select name, (select count(*) from tasks where assigned_to = e.id) cnt from employees e"
+        once = fmt(sql)
+        twice = fmt(once)
+        assert once == twice
+
+    def test_from_subquery_expands(self):
+        """FROM (SELECT ...) AS t should be expanded to multi-line."""
+        sql = "select u.id from (select id from users where active = true) as active_users"
+        result = fmt(sql)
+        ls = result.splitlines()
+        # The subquery should not be on the same line as FROM
+        from_line = next(l for l in ls if l.strip().startswith("FROM") and "active_users" not in l.strip()[5:])
+        assert "(SELECT" not in from_line
+
+    def test_join_subquery_expands(self):
+        """LEFT JOIN (SELECT ...) AS t should be expanded to multi-line."""
+        sql = "select u.id from users u left join (select user_id, max(ts) last_ts from logins group by user_id) l on l.user_id = u.id"
+        result = fmt(sql)
+        ls = result.splitlines()
+        join_line = next(l for l in ls if "LEFT JOIN" in l)
+        # The subquery content should not be inline on the JOIN line
+        assert "SELECT" not in join_line
+
+    def test_keyword_space_before_in_paren(self):
+        """IN (SELECT ...) must keep the space — not become IN(SELECT."""
+        sql = "select id from t where id in (select id from s)"
+        result = fmt(sql)
+        assert "IN (SELECT" in result
+        assert "IN(SELECT" not in result
+
+    def test_keyword_space_before_exists_paren(self):
+        """EXISTS (SELECT ...) must keep the space — not become EXISTS(SELECT."""
+        sql = "select id from t where exists (select 1 from s where s.id = t.id)"
+        result = fmt(sql)
+        assert "EXISTS (SELECT" in result
+        assert "EXISTS(SELECT" not in result
+
+    def test_leading_comment_with_cte_formats_body(self):
+        """A leading -- comment before WITH must not prevent CTE body formatting."""
+        sql = "-- report query\nwith cte as (select id, name from users where active = true) select id from cte"
+        result = fmt(sql)
+        ls = result.splitlines()
+        # Comment is preserved on the first line
+        assert ls[0].strip().startswith("--")
+        # CTE body must be formatted (multi-line), not inline
+        cte_header_idx = next(i for i, l in enumerate(ls) if "AS(" in l)
+        body_lines = [l for l in ls[cte_header_idx + 1:] if l.strip() and l.strip() not in (")", "),")]
+        assert len(body_lines) >= 2, "CTE body should be multi-line"
+
+
 class TestCommentPreservation:
     def test_line_comment_preserved(self):
         sql = "select id -- primary key\n, name from users"
