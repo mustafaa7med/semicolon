@@ -232,11 +232,12 @@ def _format_select_columns(cols: List[Column], indent: str) -> str:
         for c in cols
     ]
 
-    # AS wall: only for non-subquery columns with an explicit AS alias.
-    aliased = [c for c in normed if c.alias and c.alias_explicit and not _is_subquery_expr(c.expression)]
+    # AS wall: only for non-subquery, non-CASE columns with an explicit AS alias.
+    aliased = [c for c in normed if c.alias and c.alias_explicit
+               and not _is_subquery_expr(c.expression)
+               and not _is_case_expr(c.expression)]
     as_col = max((len(c.expression) for c in aliased), default=0)
 
-    # Indent for columns 2..N — align with the first column character.
     col_indent = " " * col_start
 
     lines: List[str] = []
@@ -255,6 +256,16 @@ def _format_select_columns(cols: List[Column], indent: str) -> str:
             if i != 0:
                 sub_lines_list[0] = col_indent + sub_lines_list[0]
             lines.append("\n".join(sub_lines_list))
+        elif _is_case_expr(col.expression):
+            case_block = _format_case_expr(col.expression, col_start)
+            case_lines_list = case_block.splitlines()
+            if col.alias:
+                alias_str = f" AS {col.alias}" if col.alias_explicit else f" {col.alias}"
+                case_lines_list[-1] = case_lines_list[-1] + alias_str
+            case_lines_list[-1] = case_lines_list[-1] + suffix
+            if i != 0:
+                case_lines_list[0] = col_indent + case_lines_list[0]
+            lines.append("\n".join(case_lines_list))
         else:
             if col.alias:
                 if col.alias_explicit:
@@ -523,7 +534,6 @@ def _has_select_inside(s: str) -> bool:
 
 
 def _is_subquery_expr(expr: str) -> bool:
-    """True if *expr* is exactly a parenthesized subquery: (SELECT ...) with nothing else."""
     s = expr.strip()
     if not s.startswith('('):
         return False
@@ -539,6 +549,127 @@ def _is_subquery_expr(expr: str) -> bool:
                 return (not remainder and
                         bool(re.match(r'^SELECT\b', inner, re.IGNORECASE)))
     return False
+
+
+def _is_case_expr(expr: str) -> bool:
+    """True if expr is a top-level CASE...END expression."""
+    s = expr.strip()
+    return (bool(re.match(r'^CASE\b', s, re.IGNORECASE)) and
+            bool(re.search(r'\bEND\s*$', s, re.IGNORECASE)))
+
+
+def _parse_case_branches(expr: str):
+    s = expr.strip()[4:].strip()  # strip 'CASE'
+    end_m = re.search(r'\bEND\s*$', s, re.IGNORECASE)
+    if end_m:
+        s = s[:end_m.start()].strip()
+
+    tokens = list(sqlparse.parse(s)[0].flatten())
+    branches = []
+    else_value = None
+    i = 0
+
+    while i < len(tokens):
+        tok = tokens[i]
+        uval = tok.value.strip().upper()
+
+        if _is_keyword_token(tok.ttype) and uval == 'WHEN':
+            i += 1
+            cond_toks: List[str] = []
+            depth = 0
+            between_active = False
+
+            while i < len(tokens):
+                t = tokens[i]
+                tv = t.value
+                tuval = tv.strip().upper()
+                if tv == '(':
+                    depth += 1
+                    cond_toks.append(tv)
+                    i += 1
+                elif tv == ')':
+                    depth -= 1
+                    cond_toks.append(tv)
+                    i += 1
+                elif depth == 0 and _is_keyword_token(t.ttype) and tuval == 'BETWEEN':
+                    between_active = True
+                    cond_toks.append(tv)
+                    i += 1
+                elif depth == 0 and _is_keyword_token(t.ttype) and tuval == 'AND' and between_active:
+                    between_active = False
+                    cond_toks.append(tv)
+                    i += 1
+                elif depth == 0 and _is_keyword_token(t.ttype) and tuval == 'THEN':
+                    i += 1
+                    break
+                else:
+                    cond_toks.append(tv)
+                    i += 1
+
+            condition = ' '.join(''.join(cond_toks).split())
+
+            then_toks: List[str] = []
+            depth = 0
+            while i < len(tokens):
+                t = tokens[i]
+                tv = t.value
+                tuval = tv.strip().upper()
+                if tv == '(':
+                    depth += 1
+                    then_toks.append(tv)
+                    i += 1
+                elif tv == ')':
+                    depth -= 1
+                    then_toks.append(tv)
+                    i += 1
+                elif depth == 0 and _is_keyword_token(t.ttype) and tuval in ('WHEN', 'ELSE'):
+                    break
+                else:
+                    then_toks.append(tv)
+                    i += 1
+
+            branches.append((condition, ' '.join(''.join(then_toks).split())))
+
+        elif _is_keyword_token(tok.ttype) and uval == 'ELSE':
+            i += 1
+            else_toks: List[str] = []
+            while i < len(tokens):
+                t = tokens[i]
+                tv = t.value
+                tuval = tv.strip().upper()
+                if _is_keyword_token(t.ttype) and tuval in ('END', 'WHEN'):
+                    break
+                else_toks.append(tv)
+                i += 1
+            else_value = ' '.join(''.join(else_toks).split())
+        else:
+            i += 1
+
+    return branches, else_value
+
+
+def _format_case_expr(expr: str, case_col: int) -> str:
+    branches, else_value = _parse_case_branches(expr)
+    if not branches:
+        return expr
+
+    max_cond = max(len(cond) for cond, _ in branches)
+    when_indent = " " * (case_col + 5)   
+    end_indent = " " * (case_col + 1)    
+
+    lines: List[str] = []
+    for idx, (cond, then_val) in enumerate(branches):
+        when_line = f"WHEN {cond.ljust(max_cond)} THEN {then_val}"
+        if idx == 0:
+            lines.append(f"CASE {when_line}")
+        else:
+            lines.append(f"{when_indent}{when_line}")
+
+    if else_value is not None:
+        lines.append(f"{when_indent}ELSE {else_value}")
+
+    lines.append(f"{end_indent}END")
+    return "\n".join(lines)
 
 
 def _format_subquery_inline(inner_sql: str, open_paren_col: int) -> str:
@@ -580,7 +711,6 @@ def _expand_subqueries_in_expr(expr: str, expr_col: int) -> str:
 
         inner = expr[i + 1:j - 1].strip()
         if re.match(r'^SELECT\b', inner, re.IGNORECASE):
-            # Compute the column where '(' appears on the current output line
             joined = ''.join(out)
             last_nl = joined.rfind('\n')
             paren_col = (len(joined) - last_nl - 1) if last_nl >= 0 else (expr_col + len(joined))
@@ -763,13 +893,6 @@ def _split_leading_comments(sql: str) -> Tuple[str, str]:
 
 
 def format_sql(sql: str) -> str:
-    """
-    Format *sql* according to the SemiColon Style and return the result.
-
-    Multiple statements (separated by ``;``) are formatted individually and
-    joined with a blank line.
-    """
-    # Split on top-level semicolons (sqlparse handles this).
     statements = sqlparse.split(sql)
     formatted: List[str] = []
     for raw in statements:

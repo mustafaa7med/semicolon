@@ -463,6 +463,110 @@ class TestSubqueryFormatting:
         assert len(body_lines) >= 2, "CTE body should be multi-line"
 
 
+class TestCaseWhenFormatting:
+    def test_when_conditions_on_separate_lines(self):
+        """First WHEN is on the CASE line; subsequent WHENs each get their own line."""
+        sql = "select CASE WHEN price < 20 THEN 'Low' WHEN price > 50 THEN 'High' ELSE 'Mid' END from t"
+        result = fmt(sql)
+        ls = result.splitlines()
+        # First WHEN is on the CASE line; second WHEN is on its own indented line
+        case_line = next(l for l in ls if "CASE WHEN" in l)
+        assert "CASE WHEN" in case_line
+        second_when_lines = [l for l in ls if l.lstrip().startswith("WHEN")]
+        assert len(second_when_lines) == 1, "Second WHEN should be on its own line"
+
+    def test_when_conditions_vertically_aligned(self):
+        sql = "select CASE WHEN price < 20 THEN 'Low' WHEN price > 50 THEN 'High' END from t"
+        result = fmt(sql)
+        ls = result.splitlines()
+        when_lines = [l for l in ls if "WHEN" in l]
+        when_cols = [l.index("WHEN") for l in when_lines]
+        assert len(set(when_cols)) == 1, f"WHEN keywords not aligned: cols={when_cols}"
+
+    def test_then_keywords_vertically_aligned(self):
+        sql = "select CASE WHEN price < 20 THEN 'Low' WHEN price BETWEEN 20 AND 50 THEN 'Medium' ELSE 'High' END from t"
+        result = fmt(sql)
+        ls = result.splitlines()
+        then_lines = [l for l in ls if " THEN " in l]
+        then_cols = [l.index(" THEN ") for l in then_lines]
+        assert len(set(then_cols)) == 1, f"THEN keywords not aligned: cols={then_cols}"
+
+    def test_else_aligns_with_when(self):
+        sql = "select CASE WHEN x = 1 THEN 'a' ELSE 'b' END from t"
+        result = fmt(sql)
+        ls = result.splitlines()
+        when_line = next(l for l in ls if "WHEN" in l)
+        else_line = next(l for l in ls if l.lstrip().startswith("ELSE"))
+        assert when_line.index("WHEN") == else_line.index("ELSE"), "ELSE should align with WHEN"
+
+    def test_end_d_below_case_e(self):
+        """'D' of END must sit directly below 'E' of CASE."""
+        sql = "select CASE WHEN x = 1 THEN 'a' ELSE 'b' END from t"
+        result = fmt(sql)
+        ls = result.splitlines()
+        case_line = next(l for l in ls if "CASE" in l)
+        end_line = next(l for l in ls if l.lstrip().startswith("END"))
+        e_of_case = case_line.index("CASE") + len("CASE") - 1  # col of 'E'
+        d_of_end = end_line.index("END") + len("END") - 1      # col of 'D'
+        assert e_of_case == d_of_end, f"'E' of CASE at col {e_of_case}, 'D' of END at col {d_of_end}"
+
+    def test_case_alias_on_end_line(self):
+        sql = "select CASE WHEN x = 1 THEN 'a' ELSE 'b' END AS label from t"
+        result = fmt(sql)
+        end_line = next(l for l in result.splitlines() if l.lstrip().startswith("END"))
+        assert "AS label" in end_line
+
+    def test_case_without_else(self):
+        sql = "select CASE WHEN x = 1 THEN 'a' WHEN x = 2 THEN 'b' END from t"
+        result = fmt(sql)
+        assert "ELSE" not in result
+        end_line = next(l for l in result.splitlines() if l.lstrip().startswith("END"))
+        assert end_line is not None
+
+    def test_between_in_case_condition_treated_as_single_condition(self):
+        """BETWEEN...AND inside a WHEN condition must not split the condition."""
+        sql = "select CASE WHEN price BETWEEN 20 AND 50 THEN 'Mid' ELSE 'Other' END from t"
+        result = fmt(sql)
+        when_lines = [l for l in result.splitlines() if "WHEN" in l]
+        assert len(when_lines) == 1, "BETWEEN...AND in WHEN should not split into two WHEN lines"
+        assert "BETWEEN 20" in when_lines[0] and "AND 50" in when_lines[0]
+
+    def test_case_not_in_as_wall(self):
+        """A CASE column should not inflate the AS wall for regular columns."""
+        sql = "select id as user_id, CASE WHEN x = 1 THEN 'a' END AS label from t"
+        result = fmt(sql)
+        id_line = next(l for l in result.splitlines() if "user_id" in l)
+        assert "AS user_id" in id_line
+        # The AS for id should be right after id with only expression-length padding
+        # (not inflated by the length of the CASE expression)
+        as_pos = id_line.index(" AS user_id")
+        assert as_pos < 30, f"AS wall inflated by CASE expr: position {as_pos}"
+
+    def test_case_idempotent(self):
+        sql = "select name, CASE WHEN price < 20 THEN 'Low' WHEN price BETWEEN 20 AND 50 THEN 'Medium' ELSE 'High' END AS category from products"
+        once = fmt(sql)
+        twice = fmt(once)
+        assert once == twice
+
+    def test_case_as_first_column(self):
+        sql = "select CASE WHEN x = 1 THEN 'a' ELSE 'b' END AS v from t"
+        result = fmt(sql)
+        first_line = result.splitlines()[0]
+        assert "CASE WHEN" in first_line
+
+    def test_case_as_non_first_column_indented(self):
+        """CASE as a non-first column must be indented to align with the first column."""
+        sql = "select id, CASE WHEN x = 1 THEN 'a' ELSE 'b' END AS v from t"
+        result = fmt(sql)
+        ls = result.splitlines()
+        first_col_start = ls[0].index("id")
+        case_line = next(l for l in ls if "CASE WHEN" in l)
+        case_col_start = case_line.index("CASE")
+        assert case_col_start == first_col_start, (
+            f"CASE not aligned with first column: expected col {first_col_start}, got {case_col_start}"
+        )
+
+
 class TestCommentPreservation:
     def test_line_comment_preserved(self):
         sql = "select id -- primary key\n, name from users"
