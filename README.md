@@ -117,7 +117,7 @@ recent_orders AS(
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/mustafaa7med/semicolon
-    rev: v0.1.3
+    rev: v0.1.4
     hooks:
       - id: semicolon
         args: [--check]
@@ -125,5 +125,3 @@ repos:
 ---
 ## License
 Apache — see [LICENSE](LICENSE).
----
-*Designed by Mostafa Ahmed (Alfie)*
